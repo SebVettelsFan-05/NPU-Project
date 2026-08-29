@@ -33,11 +33,35 @@ def noise_sigma_lsb(shot: float, read: float, level: float = 0.5) -> float:
     return float(np.sqrt(shot * level + read) * 15.0)
 
 
-def sense(clean: np.ndarray, shot: float, read: float, rng) -> np.ndarray:
-    """Apply the noise model and quantise to 4 bits. Returns int64 in 0..15."""
-    sigma = np.sqrt(shot * clean + read)
+def sense(clean: np.ndarray, shot: float, read: float, rng,
+          compand_mode: str = "none") -> np.ndarray:
+    """Apply the noise model, compand, and quantise to 4 bits.
+
+    Order matters, and it is the order a real sensor pipeline uses:
+
+        1. linear light, full precision
+        2. add shot and read noise      <- the physics, only valid in linear
+        3. compand                      <- allocates the few code values well
+        4. quantise to 4 bits
+
+    Skipping step 3 wastes most of the 16 available codes. On a typical indoor
+    photograph, quantising *linear* light to 4 bits puts about 97% of pixels
+    into codes 0 and 1; companding first spreads them across the range. Gamma
+    encoding exists for exactly this reason, and it matters far more at 4 bits
+    than at 8.
+
+    ``compand_mode="none"`` means the input is already in a coded domain, so
+    steps 1-3 collapse and the noise is added where the data already lives.
+    That is the right setting for synthetic images and for photographs used
+    without ``--linearise``; it is physically wrong about the noise, but it at
+    least does not waste the codes.
+
+    Returns int64 in 0..15.
+    """
+    sigma = np.sqrt(np.clip(shot * clean + read, 0.0, None))
     noisy = clean + sigma * rng.standard_normal(clean.shape)
-    return np.clip(np.round(noisy * 15.0), 0, 15).astype(np.int64)
+    coded = compand(np.clip(noisy, 0.0, 1.0), compand_mode)
+    return np.clip(np.round(coded * 15.0), 0, 15).astype(np.int64)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +172,28 @@ def split_images(directory: str, holdout: float = 0.25, seed: int = 0,
     test = [paths[i] for i in order[:n_test]]
     train = [paths[i] for i in order[n_test:]]
     return train, test
+
+
+COMPAND_MODES = ("none", "srgb", "gamma")
+
+
+def compand(x: np.ndarray, mode: str = "none", gamma: float = 2.2) -> np.ndarray:
+    """Linear light to code values, in [0, 1]. The inverse of the sensor's eye.
+
+    ``srgb`` is the standard transfer function and the safe default. ``gamma``
+    is a plain power curve, which is what a cheap sensor or a small ISP is more
+    likely to implement in hardware. ``none`` passes through, for data that is
+    already coded.
+    """
+    if mode not in COMPAND_MODES:
+        raise ValueError(f"compand mode must be one of {COMPAND_MODES}")
+    x = np.clip(np.asarray(x, dtype=np.float64), 0.0, 1.0)
+    if mode == "none":
+        return x
+    if mode == "gamma":
+        return x ** (1.0 / gamma)
+    return np.where(x <= 0.0031308, x * 12.92,
+                    1.055 * np.power(x, 1.0 / 2.4) - 0.055)
 
 
 def srgb_to_linear(c: np.ndarray) -> np.ndarray:

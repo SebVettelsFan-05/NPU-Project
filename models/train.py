@@ -38,8 +38,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import model as M
-from data import (NOISE_PRESETS, noise_sigma_lsb, sense, synthetic_images,
-                  load_images, split_images)
+from data import (COMPAND_MODES, NOISE_PRESETS, compand, noise_sigma_lsb, sense,
+                  synthetic_images, load_images, split_images)
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +125,19 @@ class QuantNet(nn.Module):
 # Data
 # ---------------------------------------------------------------------------
 
-def build_pairs(clean_images, shot, read, seed):
-    """Noisy 4-bit inputs and clean 6-bit targets, as (N, 1, H, W) tensors."""
+def build_pairs(clean_images, shot, read, seed, compand_mode="none"):
+    """Noisy 4-bit inputs and clean 6-bit targets, as (N, 1, H, W) tensors.
+
+    The target is the clean image **in the same coded domain as the input**.
+    The chip consumes companded 4-bit codes and emits companded 6-bit ones, so
+    asking it to output linear light would be asking it to undo the companding
+    as well as denoise.
+    """
     rng = np.random.default_rng(seed)
-    noisy = np.stack([sense(c, shot, read, rng) for c in clean_images])
-    target = np.round(np.asarray(clean_images) * float(M.OUT_MAX))
+    noisy = np.stack([sense(c, shot, read, rng, compand_mode)
+                      for c in clean_images])
+    target = np.round(compand(np.asarray(clean_images), compand_mode)
+                      * float(M.OUT_MAX))
     return (torch.tensor(noisy, dtype=torch.float32).unsqueeze(1),
             torch.tensor(target, dtype=torch.float32).unsqueeze(1))
 
@@ -228,6 +236,12 @@ def main():
     ap.add_argument("--linearise", action="store_true",
                     help="undo the sRGB gamma so the noise model is applied in "
                          "linear light, where it is physically meaningful")
+    ap.add_argument("--compand", choices=COMPAND_MODES, default=None,
+                    help="transfer curve applied after the noise and before the "
+                         "4-bit quantisation. Defaults to 'srgb' when "
+                         "--linearise is set and 'none' otherwise. Quantising "
+                         "linear light straight to 4 bits wastes most of the 16 "
+                         "codes, so do not turn this off while linearising")
     ap.add_argument("--holdout", type=float, default=0.25,
                     help="fraction of photos reserved for the test set (default 0.25)")
     ap.add_argument("--image-pattern",
@@ -247,6 +261,10 @@ def main():
     preset = NOISE_PRESETS[args.noise]
     shot = args.shot if args.shot is not None else preset["shot"]
     read = args.read if args.read is not None else preset["read"]
+    # Linearised data is in linear light, so it must be companded before the
+    # 4-bit quantisation or nearly every pixel lands in the bottom two codes.
+    compand_mode = args.compand if args.compand else ("srgb" if args.linearise
+                                                      else "none")
 
     if args.images:
         # Split by photograph, not by crop. Cropping one photo into both sets
@@ -264,11 +282,16 @@ def main():
         train_clean = synthetic_images(args.train_images, args.size, args.seed)
         test_clean = synthetic_images(args.test_images, args.size, args.seed + 1000)
 
-    train_x, train_y = build_pairs(train_clean, shot, read, args.seed + 100)
-    test_x, test_y = build_pairs(test_clean, shot, read, args.seed + 900)
+    train_x, train_y = build_pairs(train_clean, shot, read, args.seed + 100,
+                                   compand_mode)
+    test_x, test_y = build_pairs(test_clean, shot, read, args.seed + 900,
+                                 compand_mode)
 
     print(f"noise '{args.noise}': shot={shot:.4f} read={read:.5f}  "
           f"~{noise_sigma_lsb(shot, read):.1f} LSB at mid grey")
+    codes = len(np.unique(train_x.numpy().astype(int)))
+    print(f"compand '{compand_mode}': {codes}/16 four-bit codes used by the "
+          f"training set")
     print(f"train {train_x.numel():,} px   test {test_x.numel():,} px")
     print(f"channels {list(channels)}   int{M.WEIGHT_BITS} weights   "
           f"uint{M.ACT_BITS} activations   int{M.ACC_BITS} accumulator\n")
@@ -303,6 +326,7 @@ def main():
     print(f"  int{M.ACC_BITS} headroom: {M.ACC_MIN} .. {M.ACC_MAX}")
 
     meta = {"noise": args.noise, "shot": shot, "read": read,
+            "compand": compand_mode, "linearise": bool(args.linearise),
             "sigma_lsb": round(noise_sigma_lsb(shot, read), 2),
             "test_psnr_db": round(db, 2),
             "channels": list(net.channels),

@@ -187,10 +187,52 @@ using if you have them. See **Training on real photographs** below.
 | `export.py` | Weights to `weights.vh`, `weights.h`, and config words. |
 | `vectors.py` | Golden vectors for the cocotb testbench. |
 | `selftest.py` | Cross-checks the datapaths and the arithmetic invariants. |
+| `demo.py` | Run a trained net on an image and look at the result. numpy + Pillow only. |
 | `data.py` | Sensor noise model, synthetic images, and photo loading. |
 
 `model.py` has no torch dependency on purpose. The RTL reference and the
 vector generator must be runnable in any environment; only training needs torch.
+
+## Looking at the result
+
+```
+python demo.py weights_high.json --image photo.png --noise high \
+               --auto-crop --stretch --out demo.png
+```
+
+Writes a labelled panel -- clean, noisy 4-bit input, box blur, CNN output --
+and prints a PSNR table. The numeric baselines in `train.py` tell you whether
+the filter works; this tells you what it *looks* like, which catches failure
+modes a scalar cannot: ringing, banding on gradients, smeared edges, blotching
+in flat areas.
+
+- `--auto-crop` picks the highest-variance region, so you judge the filter on
+  edges and texture instead of on whatever blank wall the seed landed on.
+- `--stretch` contrast-stretches the panel **for display only**, leaving the
+  PSNRs untouched. Dark crops are otherwise impossible to read by eye, and the
+  stretch range it prints is itself a useful diagnostic -- if the image only
+  spans a few of the 63 output levels, your input tone mapping is wrong.
+- `--already-noisy` skips the noise simulation for a real noisy capture. You
+  get the picture but no PSNR, because there is no ground truth.
+- `--full` processes the **whole** image instead of a crop, and `--separate`
+  writes one file per tile rather than a very wide four-up panel. Use them
+  together; `--full` forces `--scale 1`:
+
+  ```
+  python demo.py weights_high.json --image GT.PNG --noise high --linearise                  --full --separate --stretch --out full.png
+  ```
+
+  A full 2664x1500 frame takes about 16 seconds. `model.forward` on an image
+  that size would allocate hundreds of megabytes of int64 accumulators, so
+  `--full` runs the network in horizontal strips, each cut with a 3-pixel
+  margin of real neighbouring pixels that is then discarded. The result is
+  bit-identical to whole-image processing, which `forward_strips` is tested
+  against. The accumulator ranges are then reported from a 256x256 probe window
+  rather than the whole frame, and the panel is labelled accordingly.
+
+Match `--downscale` and `--linearise` to whatever you trained with, or the
+comparison is meaningless. It needs only numpy and Pillow, since `model.py` has
+no torch dependency.
 
 ## Verification
 
@@ -332,6 +374,50 @@ python train.py --images ./SIDD_Small_sRGB --image-pattern '*GT_SRGB*' \
 
 If the pattern matches nothing you get an error listing actual filenames from
 the directory, so you can correct it without going hunting.
+
+### Companding: why 4 bits needs a transfer curve
+
+The pipeline is:
+
+```
+linear light  ->  add shot + read noise  ->  compand  ->  quantise to 4 bits
+                  (the physics)             (allocates    (16 codes, total)
+                                             the codes)
+```
+
+Step three is not optional. Quantising **linear light** straight to 4 bits is a
+catastrophic waste of the 16 available codes, because linear light devotes most
+of its range to highlights the eye barely distinguishes. On a typical indoor
+SIDD frame:
+
+| pipeline | 4-bit codes used | pixels stuck at code 0-1 |
+|---|---|---|
+| linear, no companding | 9 / 16 | 72.9% |
+| linear + `--compand gamma` | 12 / 16 | 32.6% |
+| linear + `--compand srgb` | 12 / 16 | 34.1% |
+
+Without companding the network trains on what is effectively a 1.5-bit image.
+It will still learn *something*, and the PSNR will even look good, but it is
+solving a far easier problem than the silicon will face.
+
+So `--compand` defaults to `srgb` whenever `--linearise` is set, and to `none`
+otherwise. `gamma` is a plain power curve, which is closer to what a small ISP
+or a cheap sensor actually implements in hardware; it scores about the same, so
+pick whichever matches your pipeline.
+
+`train.py` prints the code usage every run:
+
+```
+compand 'srgb': 12/16 four-bit codes used by the training set
+```
+
+If that number is low, stop and fix the tone handling before reading any PSNR.
+The target is companded too — the chip consumes coded 4-bit values and emits
+coded 6-bit ones, so asking it to output linear light would be asking it to
+undo the companding as well as denoise.
+
+`demo.py` warns if you run it with a different `--compand` than the weights
+were trained with.
 
 ### Train/test split
 
