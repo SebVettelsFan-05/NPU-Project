@@ -1,0 +1,116 @@
+# =========================
+# Python
+# =========================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Type checking / linting
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# =========================
+# SystemVerilog / Verilog
+# =========================
+
+# Simulation outputs
+*.vcd
+*.fst
+*.wlf
+*.vpd
+*.shm
+
+# Simulator generated files
+work/
+sim/
+sim_build/
+*.log
+
+# Questa/ModelSim
+transcript
+modelsim.ini
+vsim.wlf
+
+# Verilator
+obj_dir/
+verilator_*
+*.d
+*.o
+
+# Vivado / Xilinx
+.Xil/
+vivado*.log
+vivado*.jou
+vivado*.str
+*.runs/
+*.cache/
+*.hw/
+*.ip_user_files/
+
+# Quartus
+db/
+incremental_db/
+*.qws
+*.smsg
+
+# =========================
+# Build / generated files
+# =========================
+
+*.out
+*.bin
+*.hex
+*.elf
+*.mem
+
+# =========================
+# Images — NO PNGs
+# =========================
+
+*.png
+*.PNG
+
+# =========================
+# OS / Editor
+# =========================
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Temporary files
+# =========================
+
+*.tmp
+*.temp
+*~
