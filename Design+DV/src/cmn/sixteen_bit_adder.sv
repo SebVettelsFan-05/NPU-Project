@@ -1,4 +1,4 @@
-module four_bit_adder
+module sixteen_bit_adder
 (
 	input logic [15:0] in_0,
 	input logic [15:0] in_1,

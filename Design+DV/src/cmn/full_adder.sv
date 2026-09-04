@@ -8,6 +8,6 @@ module full_adder
 );
 
 assign out = in_0 ^ in_1 ^ cin;
-assign cout = (in_0 & in_1) | (in_0 & cin) | (in_1 & c_in);
+assign cout = (in_0 & in_1) | (in_0 & cin) | (in_1 & cin);
 
 endmodule
