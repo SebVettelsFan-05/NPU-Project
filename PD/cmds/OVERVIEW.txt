@@ -1,0 +1,10 @@
+Quick Reference: Yosys Schematic Config Files
+================================================
+
+File                          Output style                    Best for
+------------------------------------------------------------------------------------
+rtl.cmd                   Abstract add/sub/mux blocks     Understanding design logic
+gates_yosys.cmd            Optimized gates, boxy labels    Quick gate-level check
+gates_netlistsvg.cmd       Optimized gates, real symbols   Prettiest/most "textbook"
+gates_raw_techmap.cmd      Unoptimized primitives          Seeing raw RTL->gate mapping
+stdcell.cmd                 Standard-cell style (NAND/NOR)  Closest to real ASIC flow
