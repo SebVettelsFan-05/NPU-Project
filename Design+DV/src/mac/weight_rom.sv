@@ -3,7 +3,13 @@
 // This is the ONLY module that may `include "weights.vh".  The header has an
 // `ifndef CNN_WEIGHTS_VH guard, which expands once per compilation unit, so a
 // second include anywhere in the build silently yields nothing.  Everything
-// else reaches the weights, biases and shifts through these ports.
+// else reaches the weights and biases through these ports.
+//
+// The shift outputs were REMOVED: every requant needs the shift of the layer
+// BEHIND it (rd_sel = layer - 1), not the current one, so addr_gen supplies
+// act_shift_sel instead.  L0_SHIFT/L1_SHIFT/L2_SHIFT are therefore unreferenced
+// here, and the values are hardcoded as requant #(.SHIFT(3)) in mac_wrapper and
+// #(.SHIFT(5)) in out_stage.  A retrain that changes them will NOT be caught.
 //
 // Weights are stored BIASED: u = w + 8, unsigned 0..15.  Recover the signed
 // weight as (u - 8), or use  sum(w*a) = sum(u*a) - 8*sum(a).
@@ -24,8 +30,7 @@ module weight_rom (
     input  logic [6:0]  t,       // tap counter: 0..71 in L1, 0..8 in L0/L2
 
     output logic [31:0] w,       // w[4*s +: 4]    = slice s weight, biased u
-    output logic [63:0] bias,    // bias[8*s +: 8] = slice s bias, signed
-    output logic [3:0]  shift    // requantise shift for this layer
+    output logic [63:0] bias     // bias[8*s +: 8] = slice s bias, signed
 );
 
     /* verilator lint_off UNUSEDPARAM */
@@ -56,15 +61,6 @@ module weight_rom (
             end
         end
     endgenerate
-
-    always_comb begin
-        unique case (layer)
-            2'd0:    shift = L0_SHIFT;
-            2'd1:    shift = L1_SHIFT;
-            2'd2:    shift = L2_SHIFT;
-            default: shift = 4'bx;
-        endcase
-    end
 
     // The L0/L2 index expressions can run past the end of their 72-entry arrays
     // if t is ever driven above 8 (7*9 + 71 = 134).  Left unguarded on purpose:
