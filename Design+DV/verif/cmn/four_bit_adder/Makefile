@@ -44,9 +44,9 @@
 # trigger. Verilator finds half_adder/full_adder on its own through -I, but
 # make will not rebuild when they change unless they are listed here:
 #   DUT := cmn/four_bit_adder.sv cmn/half_adder.sv cmn/full_adder.sv
-DUT := cmn/four_bit_adder.sv
+DUT := cmn/sixteen_bit_adder.sv
 
 # The testbenches you wrote, by module name (= filename without .sv).
-TBS := tb_four_bit_adder
+TBS := tb_sixteen_bit_adder
 
 include ../../verif.mk
