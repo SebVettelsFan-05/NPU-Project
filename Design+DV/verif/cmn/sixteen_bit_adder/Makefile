@@ -1,4 +1,4 @@
-# verif/cmn/four_bit_adder -- verification of src/cmn/four_bit_adder.sv
+# verif/cmn/sixteen_bit_adder -- verification of src/cmn/sixteen_bit_adder.sv
 #
 # COMMANDS
 #   make                     build + run every testbench in TBS, print the verdict
@@ -9,9 +9,9 @@
 #                            or not it is listed in TBS, and name the ones that
 #                            are missing from TBS
 #
-#   make tb_four_bit_adder   build + run just that one testbench
+#   make tb_sixteen_bit_adder   build + run just that one testbench
 #   make -j12                overlap whole testbenches across cores
-#   make JOBS=12 tb_four_bit_adder
+#   make JOBS=12 tb_sixteen_bit_adder
 #                            parallel C++ compile of ONE test instead
 #   make PLUSARGS=+trace     re-run with VCD dumping (the tb must gate
 #                            $dumpvars on $test$plusargs("trace"))
@@ -30,23 +30,23 @@
 #   fix failures before trusting `make cov`.
 #
 # FILES IN THIS FOLDER
-#   tb_four_bit_adder.sv        stimulus + the TEST PASS/FAIL banner
-#   four_bit_adder_checker.sv   assertions, bound into the DUT
-#   four_bit_adder_cov.sv       cover properties, bound into the testbench
-#   four_bit_adder_bind.sv      the bind statements
+#   tb_sixteen_bit_adder.sv        stimulus + the TEST PASS/FAIL banner
+#   sixteen_bit_adder_checker.sv   assertions, bound into the DUT
+#   sixteen_bit_adder_cov.sv       cover properties, bound into the testbench
+#   sixteen_bit_adder_bind.sv      the bind statements
 #
 # OUTPUT LINES
-#   [four_bit_adder] build   tb_...   N rtl + M support file(s)
+#   [sixteen_bit_adder] build   tb_...   N rtl + M support file(s)
 #        ^ if M is 0 your checker/cov/bind files are NOT being compiled and
 #          every assertion in them is silently absent.
 
 # DUT sources, relative to src/. This is both the compile list and the rebuild
 # trigger. Verilator finds half_adder/full_adder on its own through -I, but
 # make will not rebuild when they change unless they are listed here:
-#   DUT := cmn/four_bit_adder.sv cmn/half_adder.sv cmn/full_adder.sv
-DUT := cmn/four_bit_adder.sv
+#   DUT := cmn/sixteen_bit_adder.sv cmn/half_adder.sv cmn/full_adder.sv
+DUT := cmn/sixteen_bit_adder.sv
 
 # The testbenches you wrote, by module name (= filename without .sv).
-TBS := tb_four_bit_adder
+TBS := tb_sixteen_bit_adder
 
 include ../../verif.mk
