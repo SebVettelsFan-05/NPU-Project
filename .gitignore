@@ -115,3 +115,8 @@ Thumbs.db
 *.tmp
 *.temp
 *~
+
+# pixi toolchain -- see dependencies/setup.sh
+dependencies/bin/
+dependencies/.pixi/
+dependencies/toolchain.mk

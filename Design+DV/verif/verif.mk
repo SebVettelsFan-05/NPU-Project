@@ -78,7 +78,7 @@ $(TBS): %: $(BUILD)/%/run.log
 # REGRESS: depends on the log FILES, not on the phony test names, so an
 # unchanged tree re-runs nothing.
 regress: $(LOGS)
-	@$(VERIF)/report.sh "$(AREA)" "$(BUILD)" $(TBS)
+	@bash $(VERIF)/report.sh "$(AREA)" "$(BUILD)" $(TBS)
 	@f=$$(grep -lE "^TEST FAIL|Assertion failed" $(LOGS) 2>/dev/null | wc -l); \
 	 printf "  [%s] %d test(s), %d failing\n" "$(AREA)" "$(words $(TBS))" "$$f"; \
 	 [ "$$f" -eq 0 ]
@@ -86,7 +86,7 @@ regress: $(LOGS)
 # HERE: build + run every tb_*.sv in THIS folder, listed or not. Bring-up
 # convenience; it also tells you which testbenches are missing from TBS.
 here: $(HERE_LOGS)
-	@$(VERIF)/report.sh "$(AREA)" "$(BUILD)" $(HERE_TBS)
+	@bash $(VERIF)/report.sh "$(AREA)" "$(BUILD)" $(HERE_TBS)
 	@u="$(filter-out $(TBS),$(HERE_TBS))"; \
 	 [ -z "$$u" ] || printf "  [%s] not listed in TBS: %s\n" "$(AREA)" "$$u"; \
 	 f=$$(grep -lE "^TEST FAIL|Assertion failed" $(HERE_LOGS) 2>/dev/null | wc -l); \
