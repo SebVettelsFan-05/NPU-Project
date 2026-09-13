@@ -1,0 +1,4 @@
+
+1. form python package for construction/deconstruction front end
+2. write block for 7x7 chunks to process(test w feedthrough 7x7 deconstruction/construction)
+3. integrate ML model into this(test weights)

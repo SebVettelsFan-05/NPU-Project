@@ -1,6 +1,6 @@
-import enforce as en
-import convert as co
-import read as re
+from . import enforce as en
+from . import convert as co
+from . import read as re
 
 
 def read_png(filename):
