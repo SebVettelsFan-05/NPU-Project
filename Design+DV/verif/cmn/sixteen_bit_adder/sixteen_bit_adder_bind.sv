@@ -7,7 +7,7 @@
 // always_comb, so it needs no clock -- which means it stays live in every build
 // that instantiates four_bit_adder, including tb_mac_slice, where the adder
 // sits under multiplier.
-bind sixten_bit_adder sixteen_bit_adder_checker u_chk (.*);
+bind sixteen_bit_adder sixteen_bit_adder_checker u_chk (.*);
 
 // Coverage needs a sampling edge and four_bit_adder has no clock, so this one
 // binds into the testbench instead, where clk exists. A bind whose target
