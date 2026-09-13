@@ -1,0 +1,19 @@
+name: verif
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  regress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The same one-time setup every developer runs -- CI == laptop.
+      - name: Toolchain (pixi env from the committed lockfile)
+        run: sh dependencies/setup.sh
+
+      # -k: run every area and report all failures, not just the first.
+      - name: Regress every verif area
+        run: make -k regress

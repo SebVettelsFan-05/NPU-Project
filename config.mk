@@ -27,6 +27,28 @@ RTL_TOP := $(SRC)/Main.sv
 TOP     := Main
 INCS    := -I$(SRC) -I$(SRC)/cmn -I$(SRC)/mac -I$(MODELS)
 
+# --- pinned toolchain ---------------------------------------------------------
+# `sh dependencies/setup.sh` writes dependencies/toolchain.mk, naming the pixi
+# env's bin directory. It goes first on PATH -- exported, so every recipe,
+# $(shell) call and sub-make sees it -- which makes plain `make regress` use the
+# pinned verilator, g++, and the make that verilator calls. No wrapper needed.
+TOOLCHAIN_MK := $(ROOT)/dependencies/toolchain.mk
+-include $(TOOLCHAIN_MK)
+
+ifdef TOOLCHAIN_BIN
+  ifeq ($(wildcard $(TOOLCHAIN_BIN)/verilator),)
+    $(error pinned toolchain missing at $(TOOLCHAIN_BIN) -- run: sh dependencies/setup.sh)
+  endif
+  ifneq ($(TOOLCHAIN_LOCK),$(firstword $(shell cksum < $(ROOT)/dependencies/pixi.lock)))
+    $(error dependencies/pixi.lock changed since setup -- run: sh dependencies/setup.sh)
+  endif
+  ifeq ($(filter $(TOOLCHAIN_BIN),$(subst :, ,$(PATH))),)
+    export PATH := $(TOOLCHAIN_BIN):$(PATH)
+  endif
+else ifeq ($(MAKELEVEL),0)
+  $(warning pinned toolchain not set up -- using whatever is on PATH. Run: sh dependencies/setup.sh)
+endif
+
 # --- tools ------------------------------------------------------------------
 # ?= so a single run can override: make VERILATOR=/opt/verilator-5.040/bin/verilator
 VERILATOR ?= verilator
