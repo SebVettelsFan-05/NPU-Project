@@ -83,8 +83,8 @@ def _read_ihdr(chunks):
 def _get_idat(chunks):
     idat = bytearray()
     for chunk_type, chunk in chunks:
-        if chunk_type == b"IDAT"
-        idat.extend(chunk_data)
+        if chunk_type == b"IDAT":
+            idat.extend(chunk)
     if len(idat) == 0:
         _error("PNG has no IDAT")
     return bytes(idat)
@@ -97,11 +97,101 @@ def _decompress(idat):
 
 
 def _unfilter_row(filtered, previous, filter_type):
+    row = bytearray(len(filtered))
 
+    for x in range(len(filtered)):
+        current = filtered[x]
+
+        left = row[x - 1] if x > 0 else 0
+        up = previous[x] if previous is not None else 0
+        up_left = previous[x - 1] if x > 0 and previous is not None else 0
+
+        if filter_type == 0:
+            value = current
+
+        elif filter_type == 1:
+            value = current + left
+
+        elif filter_type == 2:
+            value = current + up
+
+        elif filter_type == 3:
+            value = current + ((left + up) // 2)
+
+        elif filter_type == 4:
+            value = current + _paeth(left, up, up_left)
+
+        else:
+            return _error(
+                f"unsupported PNG filter type {filter_type}"
+            )
+
+        row[x] = value & 0xFF
+
+    return row
 def _decode_scanlines(raw, width, height):
+    # 4-bit grayscale = 2 pixels per byte
+    row_bytes = (width + 1) // 2
 
-def paeth(left, up, up_left):
+    expected_size = height * (row_bytes + 1)
 
-def unpack_pixels(rows, width):
+    if len(raw) != expected_size:
+        return _error(
+            f"invalid decompressed size: "
+            f"got {len(raw)}, expected {expected_size}"
+        )
 
-def read_png(filename):
+    pixels = []
+
+    pos = 0
+    previous = None
+
+    for y in range(height):
+        filter_type = raw[pos]
+        pos += 1
+
+        filtered = raw[pos:pos + row_bytes]
+        pos += row_bytes
+
+        row = _unfilter_row(
+            filtered,
+            previous,
+            filter_type
+        )
+
+        if row is None:
+            return None
+
+        pixels.append(row)
+        previous = row
+
+    return pixels
+def _paeth(left, up, up_left):
+    p = left + up - up_left
+
+    pa = abs(p - left)
+    pb = abs(p - up)
+    pc = abs(p - up_left)
+
+    if pa <= pb and pa <= pc:
+        return left
+
+    if pb <= pc:
+        return up
+
+    return up_left
+
+def _unpack_pixels(rows, width):
+    pixels = []
+
+    for row in rows:
+        pixel_row = []
+
+        for byte in row:
+            pixel_row.append(byte >> 4)
+            pixel_row.append(byte & 0x0F)
+
+        # Remove the unused nibble if width is odd
+        pixels.append(pixel_row[:width])
+
+    return pixels
