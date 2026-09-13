@@ -26,7 +26,6 @@ module mac
 
 //Signal defines
 	logic [MAC_SLICES -1 : 0] 			overflow;
-	logic [: 0] 		  			slice_in;
 	//bias and weights
 	logic signed [8*MAC_SLICES - 1:0] 		bias;
 	logic [4*MAC_SLICES - 1 : 0] 		  	weight;
@@ -45,14 +44,12 @@ module mac
 		.bias(bias),
 	);
 //MAC Slice, Requant Instantiations (8)
-	genvar i;
-	
-	
+	genvar i;	
 	generate
 		for(i = 0; i < MAC_SLICES; i++) begin : gen_mac_slice_modules
 			assign slice_in[i] = (layer == 2'd0) ? i_val : 
-					     (layer == 2'd1) ? :
-						
+					     (layer == 2'd1) ? act_bus[4*act_sel +: 4] :
+						act_bs[4*i +: 4];
 			
 			mac_slice u_mac_slice (
 				.clk(clk),
@@ -73,10 +70,8 @@ module mac
 				.out(act_bus[4*i +: 4]),
 				.shift_sel(act_shift_sel)
 			); 	
+			assign o_val = slice_out[act_sel];
 	
 		end
 	endgenerate
-	
-	
-	
-	endmodule
+endmodule
