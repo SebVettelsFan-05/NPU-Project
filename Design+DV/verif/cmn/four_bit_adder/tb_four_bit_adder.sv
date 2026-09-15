@@ -30,6 +30,7 @@ module tb_four_bit_adder;
 	initial begin
 		for(int i = 0; i < 16; i++) begin
 			for(int j = 0; j < 16; j++) begin
+				@(posedge clk);
 				in_0 = i[3:0];
 				in_1 = j[3:0];
 				@(posedge clk);

@@ -28,8 +28,9 @@ module tb_sixteen_bit_adder;
 	end
 
 	initial begin
-		for(int i = 0; i < 256; i++) begin
-			for(int j = 0; j < 256; j++) begin
+		for(int i = 0; i < 65536; i++) begin
+			for(int j = 0; j < 65536; j++) begin
+				@(posedge clk);
 				in_0 = i[15:0];
 				in_1 = j[15:0];
 				@(posedge clk);
