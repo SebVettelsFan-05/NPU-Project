@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+#
+# setup-server.sh — Slurm controller + compute node + NFS server, one machine.
+#
+# Run ON the server, as a user with sudo. Idempotent: safe to re-run.
+# Ubuntu 22.04 / 24.04, Slurm 23.11.
+#
+#   ./setup-server.sh                  autodetect everything
+#   GPU_TYPE=w6400 ./setup-server.sh   label GPUs -> --gres=gpu:w6400:1
+#   MEM_MARGIN=4000 ./setup-server.sh  reserve more RAM for the OS (MB)
+#   SHARED_DIR=/work ./setup-server.sh  exported path (MUST match the client)
+#   NO_NFS=1 ./setup-server.sh         skip the NFS half
+#
+set -euo pipefail
+
+GPU_TYPE="${GPU_TYPE:-}"
+MEM_MARGIN="${MEM_MARGIN:-2000}"
+CLUSTER_NAME="${CLUSTER_NAME:-localcluster}"
+PARTITION="${PARTITION:-gpu}"
+SHARED_DIR="${SHARED_DIR:-/work}"
+NO_NFS="${NO_NFS:-0}"
+
+say()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] && die "Run as a normal user with sudo, not as root."
+sudo -v || die "sudo required."
+
+HOST=$(hostname)
+say "Configuring '$HOST'"
+
+# ---------------------------------------------------------------- 1. hostname
+say "Checking hostname resolution"
+IP=$(hostname -I | tr ' ' '\n' | grep -vE '^(172\.1[7-9]\.|172\.2[0-9]\.|172\.3[01]\.)' \
+     | grep -v '^$' | head -1 || true)
+[[ -z "$IP" ]] && die "Could not determine a LAN IP from 'hostname -I'."
+SUBNET="$(cut -d. -f1-3 <<<"$IP").0/24"
+echo "    hostname : $HOST"
+echo "    ip       : $IP"
+echo "    subnet   : $SUBNET"
+
+# Slurm resolves node names constantly; loopback breaks multi-node and causes
+# confusing single-node failures.
+if getent hosts "$HOST" | grep -q '127.0.1.1'; then
+    warn "$HOST resolves to 127.0.1.1 — rewriting /etc/hosts"
+    sudo sed -i "/127.0.1.1/d" /etc/hosts
+fi
+getent hosts "$HOST" >/dev/null || echo "$IP    $HOST" | sudo tee -a /etc/hosts >/dev/null
+
+# -------------------------------------------------------------------- 2. munge
+say "Installing and configuring munge"
+sudo apt-get update -qq
+sudo apt-get install -y -qq munge libmunge-dev
+
+# munge REFUSES to start if these are loose. The #1 setup failure.
+sudo chown -R munge: /etc/munge /var/log/munge /var/lib/munge
+sudo chmod 0700 /etc/munge /var/log/munge /var/lib/munge
+sudo chmod 0400 /etc/munge/munge.key
+sudo systemctl enable --now munge
+sleep 1
+munge -n | unmunge >/dev/null 2>&1 || die "munge self-test failed: systemctl status munge"
+echo "    munge OK"
+
+# -------------------------------------------------------------------- 3. slurm
+say "Installing Slurm"
+sudo apt-get install -y -qq slurm-wlm slurm-wlm-doc
+sudo apt-get install -y -qq libpmix2 || warn "libpmix2 unavailable; PMIx warnings persist (harmless)"
+
+say "Creating spool and log directories"
+sudo mkdir -p /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
+sudo chown slurm: /var/spool/slurmctld /var/log/slurm
+sudo chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
+sudo touch /var/log/slurm/slurmctld.log /var/log/slurm/slurmd.log
+sudo chown slurm: /var/log/slurm/slurmctld.log /var/log/slurm/slurmd.log
+
+# ---------------------------------------------------------------- 4. GPU probe
+# Slurm needs NO CUDA/ROCm: it schedules off /dev/dri/renderD* device nodes and
+# cgroup device rules. Any GPU the kernel enumerates is schedulable.
+say "Detecting GPUs"
+mapfile -t RENDER_NODES < <(ls -1 /dev/dri/renderD* 2>/dev/null || true)
+NGPU=${#RENDER_NODES[@]}
+if (( NGPU == 0 )); then
+    warn "No /dev/dri/renderD* found — configuring a CPU-only cluster."
+    warn "That is fine. RTL simulation and builds are CPU work anyway."
+else
+    echo "    found $NGPU GPU(s):"; printf '      %s\n' "${RENDER_NODES[@]}"
+    lspci -nn 2>/dev/null | grep -i -E 'vga|display|processing accelerator' | sed 's/^/      /' || true
+fi
+
+# ----------------------------------------------------------- 5. node hardware
+# slurmd -C is authoritative; using it avoids the 'Node configuration differs
+# from hardware' drain.
+say "Reading hardware via slurmd -C"
+NODELINE=$(sudo slurmd -C 2>/dev/null | head -1)
+[[ "$NODELINE" == NodeName=* ]] || die "slurmd -C gave unexpected output: $NODELINE"
+DETECTED_MEM=$(sed -n 's/.*RealMemory=\([0-9]*\).*/\1/p' <<<"$NODELINE")
+USE_MEM=$(( DETECTED_MEM - MEM_MARGIN ))
+(( USE_MEM < 512 )) && USE_MEM=$(( DETECTED_MEM * 90 / 100 ))
+# RealMemory above what the node reports at runtime => the node goes DRAIN.
+NODELINE=$(sed "s/RealMemory=[0-9]*/RealMemory=$USE_MEM/" <<<"$NODELINE")
+echo "    detected ${DETECTED_MEM}MB, configuring ${USE_MEM}MB"
+
+GRES_SPEC=""
+if (( NGPU > 0 )); then
+    [[ -n "$GPU_TYPE" ]] && GRES_SPEC=" Gres=gpu:${GPU_TYPE}:${NGPU}" || GRES_SPEC=" Gres=gpu:${NGPU}"
+fi
+
+# -------------------------------------------------------------- 6. slurm.conf
+say "Writing /etc/slurm/slurm.conf"
+[[ -f /etc/slurm/slurm.conf ]] && sudo cp /etc/slurm/slurm.conf /etc/slurm/slurm.conf.bak
+{
+    echo "# Generated by setup-server.sh on $(date -Iseconds)"
+    echo "ClusterName=$CLUSTER_NAME"
+    echo "SlurmctldHost=$HOST"
+    echo
+    (( NGPU > 0 )) && printf '# --- GPU support ---\nGresTypes=gpu\n\n'
+cat <<'EOF'
+# --- scheduling ---
+# cons_tres (not the older cons_res) is required to schedule GPUs as a
+# consumable resource rather than locking the whole node.
+SchedulerType=sched/backfill
+SelectType=select/cons_tres
+SelectTypeParameters=CR_Core_Memory
+
+# --- process & task control ---
+ProctrackType=proctrack/cgroup
+TaskPlugin=task/affinity,task/cgroup
+
+# --- paths / users ---
+SlurmUser=slurm
+SlurmctldPidFile=/run/slurmctld.pid
+SlurmdPidFile=/run/slurmd.pid
+SlurmdSpoolDir=/var/spool/slurmd
+StateSaveLocation=/var/spool/slurmctld
+SlurmctldLogFile=/var/log/slurm/slurmctld.log
+SlurmdLogFile=/var/log/slurm/slurmd.log
+
+# --- timeouts ---
+SlurmctldTimeout=120
+SlurmdTimeout=300
+InactiveLimit=0
+MinJobAge=300
+KillWait=30
+Waittime=0
+
+# --- accounting ---
+# AccountingStorageTRES=gres/gpu is FATAL without slurmdbd. Omitted on purpose.
+AccountingStorageType=accounting_storage/none
+JobAcctGatherType=jobacct_gather/none
+MailProg=/bin/true
+
+ReturnToService=2
+
+EOF
+    echo "# --- node & partition (hardware from slurmd -C) ---"
+    echo "${NODELINE}${GRES_SPEC} State=UNKNOWN"
+    echo "PartitionName=${PARTITION} Nodes=ALL Default=YES MaxTime=INFINITE State=UP"
+} | sudo tee /etc/slurm/slurm.conf >/dev/null
+
+# --------------------------------------------------------------- 7. gres.conf
+if (( NGPU > 0 )); then
+    say "Writing /etc/slurm/gres.conf"
+    # renderD* is compute; card* is display/KMS and isolates nothing.
+    # /dev/kfd is NEVER a GRES: one shared device every ROCm process needs.
+    {
+        for dev in "${RENDER_NODES[@]}"; do
+            [[ -n "$GPU_TYPE" ]] \
+                && echo "NodeName=$HOST Name=gpu Type=$GPU_TYPE File=$dev" \
+                || echo "NodeName=$HOST Name=gpu File=$dev"
+        done
+    } | sudo tee /etc/slurm/gres.conf >/dev/null
+    sed 's/^/    /' /etc/slurm/gres.conf
+else
+    sudo rm -f /etc/slurm/gres.conf
+fi
+
+# ------------------------------------------------------------- 8. cgroup.conf
+say "Writing /etc/slurm/cgroup.conf"
+# ConstrainDevices=yes is what actually hides unallocated GPUs from a job.
+sudo tee /etc/slurm/cgroup.conf >/dev/null <<'EOF'
+CgroupPlugin=autodetect
+ConstrainCores=yes
+ConstrainRAMSpace=yes
+ConstrainDevices=yes
+EOF
+
+(( NGPU > 0 )) && { say "Adding $USER to render/video groups"; sudo usermod -aG render,video "$USER"; }
+
+# ------------------------------------------------------------------ 9. NFS
+if [[ "$NO_NFS" != "1" ]]; then
+    say "Setting up NFS export at $SHARED_DIR"
+    # THE RULE: the path must be byte-identical on server and client. Slurm
+    # records your CWD at submit time and hands it to the compute node; if that
+    # exact string does not resolve there, the job dies with a chdir error.
+    sudo apt-get install -y -qq nfs-kernel-server
+    sudo mkdir -p "$SHARED_DIR"
+    sudo chown "$USER:$USER" "$SHARED_DIR"
+    sudo chmod 2775 "$SHARED_DIR"
+
+    # NFSv4 needs only port 2049 — no rpcbind/portmapper zoo like v3.
+    EXPORT_LINE="$SHARED_DIR $SUBNET(rw,sync,no_subtree_check)"
+    if ! grep -qF "$SHARED_DIR " /etc/exports 2>/dev/null; then
+        echo "$EXPORT_LINE" | sudo tee -a /etc/exports >/dev/null
+    else
+        sudo sed -i "s|^$SHARED_DIR .*|$EXPORT_LINE|" /etc/exports
+    fi
+    sudo exportfs -ra
+    sudo systemctl enable --now nfs-server
+    echo "    exported: $(grep -F "$SHARED_DIR " /etc/exports)"
+    sudo exportfs -v | sed 's/^/    /'
+fi
+
+# ---------------------------------------------------------------- 10. firewall
+if command -v ufw >/dev/null && sudo ufw status | grep -q '^Status: active'; then
+    say "Opening ports in ufw"
+    sudo ufw allow 6817/tcp comment 'slurmctld' >/dev/null
+    sudo ufw allow 6818/tcp comment 'slurmd' >/dev/null
+    [[ "$NO_NFS" != "1" ]] && sudo ufw allow from "$SUBNET" to any port 2049 proto tcp >/dev/null
+    echo "    6817, 6818$( [[ "$NO_NFS" != "1" ]] && echo ', 2049 (NFS)')"
+fi
+
+# ------------------------------------------------------------------ 11. start
+say "Starting services"
+sudo systemctl enable --now slurmctld slurmd
+sleep 1; sudo systemctl restart slurmctld slurmd; sleep 2
+for svc in slurmctld slurmd; do
+    if ! systemctl is-active --quiet $svc; then
+        warn "$svc failed. Last 20 log lines:"; sudo journalctl -u $svc -n 20 --no-pager
+        die "$svc is not running."
+    fi
+done
+
+# ------------------------------------------------------------------ 12. verify
+say "Verifying"
+sinfo
+echo
+scontrol show node "$HOST" | grep -E 'NodeName|Gres|State=' | sed 's/^/    /'
+srun -t 1 hostname >/dev/null 2>&1 && echo "    test job: OK" \
+    || warn "test job failed — check 'sinfo -R'"
+
+cat <<EOF
+
+$(printf '\033[1;32m==> Server ready\033[0m')
+
+    Server IP  : $IP        <-- the client needs this
+    GPUs       : $NGPU
+    Memory     : ${USE_MEM}MB
+    Partition  : $PARTITION
+    Shared dir : $SHARED_DIR $( [[ "$NO_NFS" == "1" ]] && echo '(NFS skipped)' || echo "(exported to $SUBNET)" )
+
+Put the repo in the shared directory so both machines see the same path:
+
+    git clone <url> $SHARED_DIR/NPU-Project
+    # or move an existing copy:  mv ~/NPU-Project $SHARED_DIR/
+
+Then on the client:
+
+    SERVER_HOST=$IP SERVER_USER=$USER ./setup-client.sh
+
+EOF
