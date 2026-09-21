@@ -17,41 +17,136 @@ submitted from elsewhere die with a chdir error.
 /work/alice/NPU-Project       <- theirs
 ```
 
-### On the server (one time)
+### Step 1 — Your own server account (admin, one time)
 
-Ask whoever administers `chapple` to run:
+**One login per person. Never share one.** Two people on the same login are the
+same user to the server: `scancel -u $USER` cancels the other person's jobs,
+`chmod` cannot keep you apart (you both own everything), and Slurm fairshare
+counts you as one user.
 
-```bash
-sudo mkdir -p /work/<you>
-sudo chown <you>:<you> /work/<you>
-```
-
-**UIDs must match between your laptop and the server.** NFS maps by numeric UID,
-not username — if two people are both uid 1000, they will see and overwrite each
-other's files. Check with `id -u` on both machines and have the admin assign
-distinct UIDs.
-
-### Clone your copy
+Pick a UID that is free on the server *and* on every laptop that mounts `/work`
+(`getent passwd <uid>` prints nothing on each). Avoid 1000 — it is what every
+fresh Ubuntu/WSL install hands out, so it is the one that collides. Then ask
+whoever administers `chapple` to run:
 
 ```bash
-git clone git@github.com:SebVettelsFan-05/NPU-Project.git /work/<you>/NPU-Project
+sudo adduser --uid <uid> <you>
+sudo mkdir -p /work/<you> && sudo chown -R <uid>:<uid> /work/<you>
 ```
 
-Everyone works in their own clone and collaborates through git. Don't edit
+Install your key so every later command stops asking for a password:
+
+```bash
+ssh-copy-id <you>@<server-ip>
+```
+
+A remote command that uses `sudo` needs `ssh -t`, or sudo fails with
+`a terminal is required to read the password`.
+
+### Step 2 — Match your laptop UID to it
+
+**Your laptop UID must equal your server UID.** NFS checks permissions by
+number, not name. Compare `id -u` on your laptop with `ssh <you>@<server-ip> id -u`.
+If they differ you get `Permission denied` writing to your own `/work/<you>`,
+and `ls -lan /work` shows the owner as a bare number.
+
+Do this **after** Step 1, never before: if you renumber your laptop while still
+submitting jobs through someone else's login, those jobs run under the old UID
+and can no longer write into your tree.
+
+`usermod` refuses while any of your processes are running, so the change is
+made from a root shell. First, in WSL:
+
+```bash
+sudo find / -xdev -uid $(id -u) -not -path "$HOME/*"   # stragglers outside home; usually none
+sudo umount /work                                      # keep the chown well away from NFS
+```
+
+Then from Windows cmd or PowerShell:
+
+```
+wsl --shutdown
+wsl -u root
+```
+
+In that root shell (`<old>` is the UID you had, usually 1000):
+
+```bash
+usermod -u <uid> <you> && groupmod -g <uid> <you> && find / -xdev \( -uid <old> -o -gid <old> \) -exec chown -h <uid>:<uid> {} + ; id <you>
+```
+
+Back in Windows: `wsl --shutdown`, then `wsl`. Verify:
+
+```bash
+id -u                                               # <uid>
+sudo mount -a && findmnt -t nfs4                    # /work back
+echo ok > /work/<you>/.probe && rm /work/<you>/.probe && echo "WRITE OK"
+```
+
+- `usermod -u` re-chowns your home directory itself; the `find` only sweeps up
+  files elsewhere. `-xdev` stops it crossing into `/work` or `/mnt/c`.
+- Nothing on `/mnt/c` needs chowning — Windows drives are drvfs and synthesize
+  ownership, which is why everything there shows as 777.
+- `sudo` still works afterward; group membership is by name.
+- If anything goes wrong, `wsl -u root` gets you a root shell regardless.
+- `/work` directories carry ACLs (the `+` in `ls -l`). `chown` does not rewrite
+  named ACL entries, so have the admin check `getfacl /work/<you>` afterward.
+- On native Linux the same `usermod`/`groupmod`/`find` applies; run it from a
+  root console with your own account fully logged out.
+
+### Step 3 — Get your copy into `/work`
+
+Run the clone **on the server, as yourself**:
+
+```bash
+ssh <you>@<server-ip> 'git clone git@github.com:SebVettelsFan-05/NPU-Project.git /work/<you>/NPU-Project'
+```
+
+That needs a GitHub key *on the server*. Without one it fails with
+`Host key verification failed`. The repo is public, so clone over HTTPS instead
+and then point the remote back at SSH — pushes happen from your laptop, with
+your laptop's key:
+
+```bash
+ssh <you>@<server-ip> 'git clone https://github.com/SebVettelsFan-05/NPU-Project.git /work/<you>/NPU-Project && git -C /work/<you>/NPU-Project remote set-url origin git@github.com:SebVettelsFan-05/NPU-Project.git'
+```
+
+**Or copy a tree you already have.** Only ~4 MB of a working tree is worth
+copying; the rest is build output and a per-machine toolchain:
+
+```bash
+rsync -a --chmod=D755,F644 --exclude='Design+DV/verif/build/' --exclude='dependencies/.pixi/' --exclude='dependencies/bin/' --exclude='dependencies/toolchain.mk' --exclude='.*.sw[po]' --exclude='__pycache__/' /path/to/NPU-Project/ <you>@<server-ip>:/work/<you>/NPU-Project/
+ssh <you>@<server-ip> 'cd /work/<you>/NPU-Project && git checkout -- models/__pycache__ && git status --short'
+```
+
+- **Never copy `dependencies/toolchain.mk`.** It hardcodes the absolute
+  toolchain path of the machine that generated it; copied, jobs fail with
+  `pinned toolchain missing`.
+- `models/__pycache__/*.pyc` are tracked in git even though they are build
+  output, so the `__pycache__` exclude makes them show as deleted — the
+  `git checkout` restores them. `git status --short` should print nothing.
+- Keep the command on one line. Pasting `\` line continuations into some
+  terminals turns each into an escaped space, and rsync reports
+  `link_stat ".../ " failed` for the phantom arguments.
+
+Everyone works in their own directory and collaborates through git. Don't edit
 someone else's directory.
 
-### Build the toolchain (one time, ~10-15 min)
+### Step 4 — Build the toolchain (one time, ~10-15 min)
 
-The pinned pixi toolchain is per-machine — `dependencies/toolchain.mk` records
-an absolute path into a local cache and is gitignored, so it never arrives with
-a clone.
+`dependencies/toolchain.mk` records an absolute path to the pinned pixi
+toolchain and is gitignored, so it never arrives with a clone. Build it **on the
+server**, from inside `/work` — the env then lands in
+`/work/<you>/NPU-Project/dependencies/.pixi`, a path that resolves identically
+on the compute node and on your laptop:
 
 ```bash
-cd /work/<you>/NPU-Project
-sh dependencies/setup.sh
+ssh -t <you>@<server-ip> 'cd /work/<you>/NPU-Project && sh dependencies/setup.sh'
 ```
 
 Needs `curl`. If it fails with `curl: not found`, run `sudo apt install -y curl`.
+(A checkout on a Windows drive, `/mnt/c/...`, keeps its env in
+`~/.cache/rattler` instead — fine for local work, invisible to the node.)
 
 ---
 
@@ -59,7 +154,7 @@ Needs `curl`. If it fails with `curl: not found`, run `sudo apt install -y curl`
 
 ```bash
 cd /work/<you>/NPU-Project/slurm    # or a local clone, if /work is not mounted yet
-SHARED_DIR=/work SERVER_HOST=<server-ip> SERVER_USER=<server-login> ./setup-client.sh
+SHARED_DIR=/work SERVER_HOST=<server-ip> SERVER_USER=<you> ./setup-client.sh
 ```
 
 This installs `slurm-client` and `munge`, copies the munge key and `slurm.conf`
@@ -71,6 +166,35 @@ Verify:
 munge -n | unmunge     # STATUS: Success (0)
 sinfo                  # shows the partition and node
 findmnt -t nfs4        # shows /work mounted
+```
+
+If the script dies at the mount step with `Could not get lock
+/var/lib/dpkg/lock-frontend`, `unattended-upgrades` is running — not a real
+failure. Wait it out and finish by hand:
+
+```bash
+while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done; sudo apt-get install -y nfs-common && sudo mkdir -p /work && sudo mount -t nfs4 <server-ip>:/work /work && findmnt -t nfs4
+grep -qF '<server-ip>:/work' /etc/fstab || echo '<server-ip>:/work  /work  nfs4  defaults,_netdev,nofail  0  0' | sudo tee -a /etc/fstab
+```
+
+### If `sinfo` fails with `Zero Bytes were transmitted or received`
+
+Your Slurm client and the server's slurmctld are too far apart in version. `apt`
+installs whatever your Ubuntu release ships: the server (24.04) runs **23.11**,
+while Ubuntu 26.04 ships **25.11** — four releases apart, beyond Slurm's
+~two-release compatibility window. The TCP connection opens and is dropped, so
+port 6817 tests open and munge still reports `Success (0)`. Compare:
+
+```bash
+sinfo --version ; ssh <you>@<server-ip> sinfo --version
+```
+
+If they are too far apart, skip the local client and submit on the server. The
+files are the same through `/work`, and `slurm-<jobid>.out` lands in your tree
+where you can `tail -f` it locally:
+
+```bash
+ssh <you>@<server-ip> 'cd /work/<you>/NPU-Project && sbatch -c 6 --mem=4G --time=45 --wrap="make JOBS=6 regress"'
 ```
 
 ---
@@ -186,7 +310,7 @@ free CPU/GPU/memory, which is normal.
 
 ```bash
 scancel 42                  # one job
-scancel -u $USER            # all of yours
+scancel -u $USER            # all of yours (only safe on your own login)
 scancel --name=regress      # by name
 ```
 
@@ -255,7 +379,7 @@ Never multiply them. `-j6 JOBS=6` spawns up to 36 compilers on 6 cores.
 | Build output | `Design+DV/verif/build/<tb_name>/` — shared across areas |
 | Per-test log | `Design+DV/verif/build/<tb_name>/run.log` |
 | Coverage | `Design+DV/verif/build/<tb_name>/coverage.dat` |
-| Toolchain | the server user's `~/.cache/rattler`, **not** in `/work` |
+| Toolchain | `/work/<you>/NPU-Project/dependencies/.pixi` (a `/mnt/c` checkout uses `~/.cache/rattler`) |
 
 A test passes only if `run.log` contains `TEST PASS` at the start of a line. An
 assertion failure aborts the sim, so the banner never prints and no
@@ -280,3 +404,10 @@ failures are fixed.
 | `pinned toolchain missing` | `toolchain.mk` came from another machine — delete it and re-run setup |
 | `mv: Permission denied` on Windows | VS Code or Explorer holds the folder. Close them |
 | `srun` hangs on WSL | Expected (NAT). Use `sbatch` |
+| `Zero Bytes were transmitted or received` | Client/server Slurm versions too far apart. Compare `sinfo --version`; submit over SSH (Part 2) |
+| `Permission denied` writing to your own `/work/<you>` | Laptop UID differs from server UID — Part 1, Step 2 |
+| `sudo: a terminal is required` over SSH | Use `ssh -t` |
+| `Could not get lock /var/lib/dpkg/lock-frontend` | `unattended-upgrades` is running. Wait, then finish by hand (Part 2) |
+| `git clone` on the server: `Host key verification failed` | Server has no GitHub key. Clone over HTTPS (Part 1, Step 3) |
+| rsync `link_stat ".../ " failed` | Pasted `\` continuations became escaped spaces. Use one line |
+| Jobs vanish that you didn't cancel | Someone shares your login and ran `scancel -u`. Get separate accounts (Part 1, Step 1) |
