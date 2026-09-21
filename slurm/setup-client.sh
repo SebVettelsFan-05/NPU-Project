@@ -7,7 +7,11 @@
 # shared directory behaves exactly like LSF's `bsub`: the job runs in the
 # folder you submitted from.
 #
-#   SERVER_HOST=192.168.2.245 SERVER_USER=chapple ./setup-client.sh
+#   SERVER_HOST=192.168.2.245 SERVER_USER=<you> ./setup-client.sh
+#
+# The client's Slurm must be close to the server's version (server: 23.11).
+# A newer Ubuntu's slurm-client fails with "Zero Bytes were transmitted or
+# received"; build a matching client instead -- see NEW-USER.md Part 2.
 #
 # Options:
 #   SHARED_DIR=/work   must match the server's export exactly

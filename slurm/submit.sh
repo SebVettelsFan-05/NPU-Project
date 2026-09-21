@@ -7,7 +7,7 @@
 #
 #   ./submit.sh make regress                     defaults: 4 cpus, 2G, 30 min
 #   ./submit.sh -c 6 -m 4G make JOBS=6 regress
-#   ./submit.sh -c 6 -m 6G -t 60 make -j6 regress
+#   ./submit.sh -c 6 -m 5G -t 60 make -j6 regress
 #   ./submit.sh -n make regress                  don't wait, just queue it
 #   ./submit.sh -o build.log make regress        name the log file
 #

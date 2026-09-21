@@ -129,6 +129,14 @@ ssh <you>@<server-ip> 'cd /work/<you>/NPU-Project && git checkout -- models/__py
   terminals turns each into an escaped space, and rsync reports
   `link_stat ".../ " failed` for the phantom arguments.
 
+**Either way, restore the execute bits.** Git records only one of this repo's
+scripts as executable, and the rsync `--chmod` above strips them all, so
+`./setup-client.sh` or `submit.sh` otherwise fails with `Permission denied`:
+
+```bash
+ssh <you>@<server-ip> "cd /work/<you>/NPU-Project && find . -name '*.sh' -not -path './.git/*' -exec chmod +x {} +"
+```
+
 Everyone works in their own directory and collaborates through git. Don't edit
 someone else's directory.
 
@@ -189,13 +197,20 @@ port 6817 tests open and munge still reports `Success (0)`. Compare:
 sinfo --version ; ssh <you>@<server-ip> sinfo --version
 ```
 
-If they are too far apart, skip the local client and submit on the server. The
-files are the same through `/work`, and `slurm-<jobid>.out` lands in your tree
-where you can `tail -f` it locally:
+If they are too far apart, build a client that matches the server. It installs
+into your home directory, reads the `/etc/slurm/slurm.conf` and munge key that
+`setup-client.sh` already put in place, and takes a few minutes (use the exact
+version the server prints):
 
 ```bash
-ssh <you>@<server-ip> 'cd /work/<you>/NPU-Project && sbatch -c 6 --mem=4G --time=45 --wrap="make JOBS=6 regress"'
+sudo apt-get install -y libmunge-dev
+V=23.11.4; cd /tmp && curl -fsSL https://download.schedmd.com/slurm/slurm-$V.tar.bz2 | python3 -c "import sys,tarfile; tarfile.open(fileobj=sys.stdin.buffer, mode='r|bz2').extractall('.', filter='tar')" && cd slurm-$V && ./configure -q --prefix=$HOME/.local/slurm-$V --sysconfdir=/etc/slurm && make -j8 -s && make install -s
+echo "export PATH=\"\$HOME/.local/slurm-$V/bin:\$PATH\"" >> ~/.bashrc && source ~/.bashrc
+which sbatch && sinfo      # ~/.local/slurm-<V>/bin/sbatch, and the chapple node
 ```
+
+(`python3` does the extraction because a minimal Ubuntu has no `bzip2`.) After
+that, plain `sbatch` and `submit.sh` work from your own folder, no SSH needed.
 
 ---
 
@@ -344,8 +359,8 @@ Use `sbatch` there.
 This is CPU work. Verilator elaboration and the g++ compile of the generated
 model are the whole cost — never request a GPU for it.
 
-`chapple` has 12 CPUs and ~5.8 GB available to Slurm, so **memory binds before
-cores do.**
+`chapple` has 12 CPUs and 5857 MB available to Slurm (`RealMemory`), so
+**memory binds before cores do.**
 
 | Job | Flags |
 |---|---|
@@ -404,7 +419,10 @@ failures are fixed.
 | `pinned toolchain missing` | `toolchain.mk` came from another machine — delete it and re-run setup |
 | `mv: Permission denied` on Windows | VS Code or Explorer holds the folder. Close them |
 | `srun` hangs on WSL | Expected (NAT). Use `sbatch` |
-| `Zero Bytes were transmitted or received` | Client/server Slurm versions too far apart. Compare `sinfo --version`; submit over SSH (Part 2) |
+| `Requested node configuration is not available` | Asked for more than the node has — `--mem` above 5857 MB (so `6G` fails) or `-c` above 12 |
+| `submit.sh: Permission denied` | Execute bit missing — `chmod +x` the scripts (Part 1, Step 3) |
+| Still `Zero Bytes` after building the client | That terminal predates the PATH change: `source ~/.bashrc`, then `which sbatch` should be `~/.local/slurm-<V>/bin/sbatch` |
+| `Zero Bytes were transmitted or received` | Client/server Slurm versions too far apart. Compare `sinfo --version`; build a matching client (Part 2) |
 | `Permission denied` writing to your own `/work/<you>` | Laptop UID differs from server UID — Part 1, Step 2 |
 | `sudo: a terminal is required` over SSH | Use `ssh -t` |
 | `Could not get lock /var/lib/dpkg/lock-frontend` | `unattended-upgrades` is running. Wait, then finish by hand (Part 2) |

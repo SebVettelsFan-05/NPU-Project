@@ -29,7 +29,7 @@ laptop (WSL)  — submit host
 the same string.
 
 Slurm records your working directory at submit time and hands it to the compute
-node verbatim. If `/work/NPU-Project` exists on both, the job just works. If you
+node verbatim. If `/work/<you>/NPU-Project` exists on both, the job just works. If you
 export `/home/chapple` and mount it at `/home/daniel`, the paths differ and the
 job dies with a chdir error.
 
@@ -49,7 +49,8 @@ Everything outside the shared directory is invisible to the compute node.
 | Client: Linux or WSL | No native Windows Slurm client. |
 | Network route between them | Same LAN or VPN. |
 | SSH from client to server | Used to copy the munge key and config. |
-| **Matching numeric UID** | Slurm *and* NFS key on UID, not username. |
+| **One account per person, matching numeric UID** | Slurm *and* NFS key on UID, not username. Never share a login. See `NEW-USER.md` Part 1. |
+| **Client Slurm near the server's version** | `apt` installs what the client's Ubuntu ships. 24.04 server = 23.11; a 26.04 client gets 25.11, which cannot talk to it. See `NEW-USER.md` Part 2. |
 
 A GPU is **optional**. RTL simulation and builds are CPU work; the scripts
 detect zero GPUs and configure a CPU-only cluster without complaint.
@@ -78,15 +79,18 @@ Idempotent — re-run after adding a GPU or changing RAM. Your previous
 
 It prints the **server IP** at the end. The client needs it.
 
-### Then move the repo into the shared directory
+### Then give each person a directory in the shared space
 
-This is the step that makes everything else work:
+This is the step that makes everything else work. Each person gets their own
+account (distinct UID) and their own tree:
 
 ```bash
-git clone <url> /work/NPU-Project
-# or move an existing copy:
-mv ~/NPU-Project /work/
+sudo adduser --uid <uid> <you>
+sudo mkdir -p /work/<you> && sudo chown -R <uid>:<uid> /work/<you>
 ```
+
+The tree then goes in `/work/<you>/NPU-Project` — by clone, or by copying an
+existing checkout. `NEW-USER.md` Part 1 covers both, including what not to copy.
 
 ### What the server script does
 
@@ -112,7 +116,7 @@ Get the server's IP first (`hostname -I` on the server), then:
 
 ```bash
 chmod +x setup-client.sh submit.sh
-SERVER_HOST=192.168.2.245 SERVER_USER=chapple ./setup-client.sh
+SERVER_HOST=192.168.2.245 SERVER_USER=<you> ./setup-client.sh
 ```
 
 You'll be prompted for the server's SSH password, and once for its sudo
@@ -145,8 +149,12 @@ NO_NFS=1 ./setup-client.sh           # Slurm client only, no mount
 munge -n | unmunge     # STATUS: Success (0)
 sinfo                  # shows the partition and node
 findmnt -t nfs4        # shows the shared mount
-touch /work/hello && ssh chapple@<ip> 'ls /work/hello'
+touch /work/<you>/hello && ssh <you>@<ip> 'ls /work/<you>/hello'
+sinfo --version ; ssh <you>@<ip> sinfo --version   # must be close; see NEW-USER.md Part 2
 ```
+
+If `sinfo` fails with `Zero Bytes were transmitted or received` while munge
+reports `Success (0)`, the client and server Slurm versions are too far apart.
 
 ---
 
@@ -155,8 +163,8 @@ touch /work/hello && ssh chapple@<ip> 'ls /work/hello'
 From anywhere inside the shared directory:
 
 ```bash
-cd /work/NPU-Project/Design+DV/verif/cmn/sixteen_bit_adder
-/work/NPU-Project/slurm/submit.sh -c 6 -m 4G make JOBS=6 regress
+cd /work/<you>/NPU-Project/Design+DV/verif/cmn/sixteen_bit_adder
+/work/<you>/NPU-Project/slurm/submit.sh -c 6 -m 4G make JOBS=6 regress
 ```
 
 The job runs in that folder and `slurm-<jobid>.out` lands there — visible from
@@ -219,10 +227,11 @@ conversation with a third machine as the compute node.
 | `mpi/pmix: can not load PMIx library` | Cosmetic. `sudo apt install libpmix2` |
 | `Could not open node state file` | Normal on first start |
 | `sinfo` hangs | Port 6817 blocked: `sudo ufw allow 6817/tcp` |
+| `Zero Bytes were transmitted or received` | Client/server Slurm versions too far apart. Build a matching client (`NEW-USER.md` Part 2) |
 | Job fails instantly, chdir error | Submitted from outside the shared dir |
 | NFS mount fails | `sudo exportfs -v` on the server; check port 2049 and the subnet |
 | Mount gone after restart | `sudo mount -a` (fstab entry uses `nofail`) |
-| Files owned by the wrong user | UID mismatch — `id -u` on both, fix with `usermod -u` |
+| Files owned by the wrong user | UID mismatch — `id -u` on both, fix with `usermod -u` (`NEW-USER.md` Part 1, Step 2) |
 | `Permission denied` writing to `/etc/...` | `>` runs as *you*. Use `sudo tee` |
 | Interactive `srun` hangs | Expected on WSL/NAT. Use `sbatch`/`submit.sh` |
 

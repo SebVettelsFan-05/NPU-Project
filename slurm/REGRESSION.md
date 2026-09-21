@@ -1,7 +1,10 @@
 # Running `make regress` on the Cluster
 
-Assumes `SETUP.md` is done and the repo lives in the shared directory
-(`/work/NPU-Project`).
+Assumes `NEW-USER.md` is done: your tree lives at `/work/<you>/NPU-Project`
+(or your old path, if you made the symlink in Part 3), and `sinfo` on your
+laptop lists the `chapple` node. If `sinfo` fails with `Zero Bytes were
+transmitted or received`, your Slurm client is the wrong version — see
+`NEW-USER.md` Part 2. Nothing below works until that is fixed.
 
 ---
 
@@ -17,8 +20,8 @@ make regress
 On the cluster:
 
 ```bash
-cd /work/NPU-Project/Design+DV/verif/cmn/sixteen_bit_adder
-/work/NPU-Project/slurm/submit.sh -c 6 -m 4G make JOBS=6 regress
+cd /work/<you>/NPU-Project/Design+DV/verif/cmn/sixteen_bit_adder
+/work/<you>/NPU-Project/slurm/submit.sh -c 6 -m 4G make JOBS=6 regress
 ```
 
 Same directory, same command — it just runs on `chapple` instead of here. The
@@ -27,10 +30,10 @@ log lands in that folder as `slurm-<jobid>.out`.
 Put the scripts on your PATH to shorten it:
 
 ```bash
-echo 'export PATH="/work/NPU-Project/slurm:$PATH"' >> ~/.bashrc
+echo 'export PATH="/work/<you>/NPU-Project/slurm:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 
-cd /work/NPU-Project/Design+DV/verif/cmn/sixteen_bit_adder
+cd /work/<you>/NPU-Project/Design+DV/verif/cmn/sixteen_bit_adder
 submit.sh -c 6 -m 4G make JOBS=6 regress
 ```
 
@@ -40,27 +43,30 @@ submit.sh -c 6 -m 4G make JOBS=6 regress
 
 ## First run: the toolchain
 
-The pinned pixi toolchain is per-machine — `dependencies/toolchain.mk` records
-an absolute path into the local rattler cache and is gitignored, so it does not
-travel with the repo. Build it once on the server:
+`dependencies/toolchain.mk` records an absolute path to the pinned pixi
+toolchain and is gitignored, so it does not travel with the repo. Build it once
+on the server:
 
 ```bash
-ssh chapple@<ip> 'cd /work/NPU-Project && sh dependencies/setup.sh'
+ssh -t <you>@<ip> 'cd /work/<you>/NPU-Project && sh dependencies/setup.sh'
 ```
 
 That downloads pixi plus verilator/g++/yosys — 10–15 minutes. Or let the job do
 it, with a generous time limit:
 
 ```bash
-cd /work/NPU-Project
+cd /work/<you>/NPU-Project
 ./slurm/submit.sh -c 6 -m 4G -t 45 ./slurm/jobs/regress.sh
 ```
 
 `jobs/regress.sh` detects the missing toolchain and runs setup itself. Later
 runs skip it.
 
-Note the toolchain lands in the server user's `~/.cache`, **not** in `/work`, so
-it does not interfere with your laptop's copy.
+The toolchain lands inside your tree, in
+`/work/<you>/NPU-Project/dependencies/.pixi`, so the same path works on the
+compute node and on your laptop. (Only a checkout on a Windows drive, `/mnt/c`,
+keeps its env in `~/.cache/rattler` instead.) Never copy a `toolchain.mk` from
+another machine — delete it and re-run setup.
 
 ---
 
@@ -69,14 +75,15 @@ it does not interfere with your laptop's copy.
 **This is CPU work.** Verilator elaboration and the g++ compile of the generated
 model are the entire cost. Never pass `-g`.
 
-`chapple` has 12 CPUs and **~6 GB configured for Slurm** — memory binds before
-cores do.
+`chapple` has 12 CPUs and **5857 MB configured for Slurm** (`RealMemory`) —
+memory binds before cores do. `-m 6G` is 6144 MB, more than the node has, and
+is rejected with `Requested node configuration is not available`.
 
 | Job | Flags |
 |---|---|
 | One small area | `-c 4 -m 2G -t 15` |
 | One area, first run (toolchain) | `-c 6 -m 4G -t 45` |
-| Whole tree | `-c 6 -m 6G -t 60` |
+| Whole tree | `-c 6 -m 5G -t 60` |
 
 If a job is killed with `oom-kill` or `Exceeded job memory limit`, raise `-m`;
 if that hits the node ceiling, lower `-c` instead — concurrent g++ processes are
@@ -111,10 +118,10 @@ Use it when you want two things plain `submit.sh` doesn't do:
 - on failure, tail the failing `run.log` files into the job output
 
 ```bash
-cd /work/NPU-Project
+cd /work/<you>/NPU-Project
 ./slurm/submit.sh -c 6 -m 4G ./slurm/jobs/regress.sh
 NPU_AREA=Design+DV/verif/cmn/multiplier ./slurm/submit.sh -c 6 -m 4G ./slurm/jobs/regress.sh
-NPU_AREA=all ./slurm/submit.sh -c 6 -m 6G -t 60 ./slurm/jobs/regress.sh
+NPU_AREA=all ./slurm/submit.sh -c 6 -m 5G -t 60 ./slurm/jobs/regress.sh
 ```
 
 For everyday runs in a single area, `submit.sh ... make JOBS=6 regress` is
@@ -143,7 +150,7 @@ they're already visible from both machines.
 squeue                      # the queue
 squeue -u $USER             # just yours
 scancel <jobid>             # kill one
-scancel -u $USER            # kill all of yours
+scancel -u $USER            # kill all of yours (only safe on your own login)
 sinfo                       # node state
 sinfo -R                    # why a node is down
 scontrol show job <id>      # full detail
@@ -152,7 +159,7 @@ scontrol show job <id>      # full detail
 Queue several and walk away:
 
 ```bash
-cd /work/NPU-Project
+cd /work/<you>/NPU-Project
 for a in cmn/flop cmn/four_bit_adder cmn/full_adder cmn/multiplier cmn/sixteen_bit_adder; do
     NPU_AREA="Design+DV/verif/$a" ./slurm/submit.sh -n -c 4 -m 2G ./slurm/jobs/regress.sh
 done
@@ -181,6 +188,9 @@ It pays off for:
 
 | Symptom | Cause / fix |
 |---|---|
+| `Zero Bytes were transmitted or received` | Laptop Slurm client too far from the server's 23.11. Build a matching one (`NEW-USER.md` Part 2) |
+| `Requested node configuration is not available` | Asked for more than the node has — `-m` above 5857 MB or `-c` above 12 |
+| `submit.sh: Permission denied` | Lost its execute bit (git does not track it here). `chmod +x slurm/*.sh slurm/jobs/*.sh` |
 | `[fail] ... is not on shared (NFS) storage` | You're outside `/work`. `cd` into the shared copy |
 | Job fails instantly, chdir error | Same cause, if you used plain `sbatch` |
 | `pinned toolchain missing at ...` | `toolchain.mk` came from another machine. Delete it on the server and re-run |

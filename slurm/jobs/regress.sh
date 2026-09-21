@@ -13,7 +13,7 @@
 #
 #     cd <repo root>
 #     ./slurm/submit.sh -c 6 -m 4G -t 45 ./slurm/jobs/regress.sh
-#     NPU_AREA=all ./slurm/submit.sh -c 6 -m 6G -t 60 ./slurm/jobs/regress.sh
+#     NPU_AREA=all ./slurm/submit.sh -c 6 -m 5G -t 60 ./slurm/jobs/regress.sh
 #
 # Env:
 #   NPU_AREA   area path relative to the repo root, or "all" for the whole tree
@@ -42,8 +42,9 @@ echo
 cd "$REPO" || { echo "FATAL: cannot enter $REPO"; exit 1; }
 
 # --- toolchain -------------------------------------------------------------
-# dependencies/toolchain.mk records an absolute path into the local rattler
-# cache and is gitignored, so it is per-machine by design.
+# dependencies/toolchain.mk records the absolute path of the pinned toolchain
+# (in-tree under dependencies/.pixi; ~/.cache/rattler for a /mnt/c checkout)
+# and is gitignored, so it is per-machine by design.
 if [[ ! -f dependencies/toolchain.mk ]]; then
     echo "==> pinned toolchain missing; running dependencies/setup.sh (first run only)"
     echo "    this downloads verilator/g++/yosys and takes 10-15 minutes"
